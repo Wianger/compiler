@@ -1,0 +1,89 @@
+#include "token.h"
+#include <stdexcept> // For std::out_of_range in robust version
+
+std::string tokenTypeToString(TokenType type) {
+  switch (type) {
+  case TokenType::CONST_KW:
+    return "CONST_KW";
+  case TokenType::INT_KW:
+    return "INT_KW";
+  case TokenType::VOID_KW:
+    return "VOID_KW";
+  case TokenType::MAIN_KW:
+    return "MAIN_KW";
+  case TokenType::IF_KW:
+    return "IF_KW";
+  case TokenType::ELSE_KW:
+    return "ELSE_KW";
+  case TokenType::WHILE_KW:
+    return "WHILE_KW";
+  case TokenType::BREAK_KW:
+    return "BREAK_KW";
+  case TokenType::CONTINUE_KW:
+    return "CONTINUE_KW";
+  case TokenType::RETURN_KW:
+    return "RETURN_KW";
+  case TokenType::GETINT_KW:
+    return "GETINT_KW";
+  case TokenType::PRINTF_KW:
+    return "PRINTF_KW";
+  case TokenType::IDENT:
+    return "IDENT";
+  case TokenType::INT_CONST:
+    return "INT_CONST";
+  case TokenType::FORMAT_STRING:
+    return "FORMAT_STRING";
+  case TokenType::PLUS:
+    return "PLUS";
+  case TokenType::MINUS:
+    return "MINUS";
+  case TokenType::MULTIPLY:
+    return "MULTIPLY";
+  case TokenType::DIVIDE:
+    return "DIVIDE";
+  case TokenType::MODULO:
+    return "MODULO";
+  case TokenType::ASSIGN:
+    return "ASSIGN";
+  case TokenType::EQ:
+    return "EQ";
+  case TokenType::NEQ:
+    return "NEQ";
+  case TokenType::LT:
+    return "LT";
+  case TokenType::GT:
+    return "GT";
+  case TokenType::LTE:
+    return "LTE";
+  case TokenType::GTE:
+    return "GTE";
+  case TokenType::LOGICAL_AND:
+    return "LOGICAL_AND";
+  case TokenType::LOGICAL_OR:
+    return "LOGICAL_OR";
+  case TokenType::LOGICAL_NOT:
+    return "LOGICAL_NOT";
+  case TokenType::LPAREN:
+    return "LPAREN";
+  case TokenType::RPAREN:
+    return "RPAREN";
+  case TokenType::LBRACKET:
+    return "LBRACKET";
+  case TokenType::RBRACKET:
+    return "RBRACKET";
+  case TokenType::LBRACE:
+    return "LBRACE";
+  case TokenType::RBRACE:
+    return "RBRACE";
+  case TokenType::COMMA:
+    return "COMMA";
+  case TokenType::SEMICOLON:
+    return "SEMICOLON";
+  case TokenType::END_OF_FILE:
+    return "END_OF_FILE";
+  case TokenType::UNKNOWN:
+    return "UNKNOWN";
+  default:
+    return "INVALID_TOKEN_TYPE"; // Should not happen
+  }
+}
