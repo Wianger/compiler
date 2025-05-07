@@ -1,6 +1,7 @@
 #include "ast.h" // Include AST nodes (needed for CompUnitNode and toString methods)
 #include "lexer.h"
-#include "parser.h" // Include Parser
+#include "parser.h"            // Include Parser
+#include "semantic_analyzer.h" // <-- Added
 #include "token.h"
 #include <fstream>
 #include <iostream>
@@ -38,16 +39,20 @@ int main(int argc, char *argv[]) {
   try {
     tokens = lexer.tokenize();
     // Optional: Print tokens for debugging lexer
-    // for (const auto& token : tokens) {
-    //     std::cout << "Token: " << tokenTypeToString(token.type)
-    //               << ", Lexeme: '" << token.lexeme
-    //               << "', Line: " << token.line
-    //               << ", Column: " << token.column << std::endl;
-    // }
+    for (const auto &token : tokens) {
+      std::cout << "Token: " << tokenTypeToString(token.type) << ", Lexeme: '"
+                << token.lexeme << "', Line: " << token.line
+                << ", Column: " << token.column << std::endl;
+    }
   } catch (const std::runtime_error
                &e) { // Catch potential errors from lexer (e.g. NumberNode stoi)
     std::cerr << "Lexical Error: " << e.what() << std::endl;
     return 1;
+  }
+  for (const auto &token : tokens) {
+    std::cout << "Token: " << tokenTypeToString(token.type) << ", Lexeme: '"
+              << token.lexeme << "', Line: " << token.line
+              << ", Column: " << token.column << std::endl;
   }
   std::cout << "Lexing completed. Number of tokens: " << tokens.size()
             << std::endl;
@@ -61,20 +66,27 @@ int main(int argc, char *argv[]) {
 
     if (ast_root) {
       std::cout << "\n--- Abstract Syntax Tree (AST) ---" << std::endl;
-      std::cout << ast_root->toString() << std::endl;
-    } else {
-      std::cerr << "Parsing finished, but AST root is null (this might "
-                   "indicate an issue)."
-                << std::endl;
-    }
+      std::cout << ast_root->toString()
+                << std::endl; // Keep or comment outas needed
 
+      std::cout << "\n--- Semantic Analysis ---" << std::endl;
+      SemanticAnalyzer semantic_analyzer;
+      semantic_analyzer.analyze(ast_root.get()); // Pass raw pointer
+      std::cout << "Semantic analysis completed successfully." << std::endl;
+
+    } else {
+      std::cerr << "Parsing finished, but AST root is null." << std::endl;
+    }
   } catch (const ParseError &e) {
     std::cerr << "Syntax Error: " << e.what() << std::endl;
-    return 1; // Indicate failure
+    return 1;                        // Indicate failure
+  } catch (const SemanticError &e) { // <-- Catch SemanticError
+    std::cerr << "Semantic Error: " << e.what() << std::endl;
+    return 1;
   } catch (const std::runtime_error
                &e) { // Catch other potential runtime errors (e.g. from
                      // NumberNode stoi called during parsing)
-    std::cerr << "Runtime Error during parsing: " << e.what() << std::endl;
+    std::cerr << "Runtime Error: " << e.what() << std::endl;
     return 1;
   }
 

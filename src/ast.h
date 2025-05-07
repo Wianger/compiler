@@ -368,43 +368,21 @@ struct ContinueStmtNode : public Statement {
 
 // Stmt -> 'return' [Exp] ';'
 struct ReturnStmtNode : public Statement {
-  std::optional<std::unique_ptr<Expression>> return_value;
+  std::optional<std::unique_ptr<Expression>> return_expression;
 
-  ReturnStmtNode(int line,
-                 std::optional<std::unique_ptr<Expression>> val = std::nullopt)
-      : Statement(line), return_value(std::move(val)) {}
+  ReturnStmtNode(int line, std::optional<std::unique_ptr<Expression>> expr)
+      : Statement(line), return_expression(std::move(expr)) {}
 
   std::string toString(int indentLevel = 0) const override {
     std::ostringstream oss;
     oss << indent(indentLevel) << "ReturnStmtNode (Line: " << line_number
         << ") {\n";
-    if (return_value && return_value.value()) {
+    if (return_expression && return_expression.value()) {
       oss << indent(indentLevel + 1) << "ReturnValue:\n";
-      oss << return_value.value()->toString(indentLevel + 2);
+      oss << return_expression.value()->toString(indentLevel + 2);
     } else {
       oss << indent(indentLevel + 1) << "ReturnValue: <void_or_nullopt>\n";
     }
-    oss << indent(indentLevel) << "}\n";
-    return oss.str();
-  }
-};
-
-// Stmt -> LVal = 'getint''('')'';'
-struct GetIntStmtNode : public Statement {
-  std::unique_ptr<LValNode> lval;
-
-  GetIntStmtNode(int line, std::unique_ptr<LValNode> lv)
-      : Statement(line), lval(std::move(lv)) {}
-
-  std::string toString(int indentLevel = 0) const override {
-    std::ostringstream oss;
-    oss << indent(indentLevel) << "GetIntStmtNode (Line: " << line_number
-        << ") {\n";
-    oss << indent(indentLevel + 1) << "LValue (Target):\n";
-    if (lval)
-      oss << lval->toString(indentLevel + 2);
-    else
-      oss << indent(indentLevel + 2) << "<null_lval>\n";
     oss << indent(indentLevel) << "}\n";
     return oss.str();
   }
@@ -634,15 +612,21 @@ inline std::string funcReturnTypeToString(FunctionReturnType rt) {
 }
 
 struct FuncParamNode : public ASTNode {
+  Token type_token; // BType, will be 'int' in SysY based on grammar: FuncFParam
+                    // -> BType Ident [ '[' ']' { '[' ConstExp ']' } ]
   Token identifier;
+  bool is_array_param; // True if declared with at least one '[]', e.g., 'int
+                       // a[]', false for 'int a' For this phase 1, we only care
+                       // about the first simple '[]'
 
-  FuncParamNode(int line, Token id)
-      : ASTNode(line), identifier(std::move(id)) {}
+  FuncParamNode(int line, Token type_tok, Token id, bool is_arr)
+      : ASTNode(line), type_token(std::move(type_tok)),
+        identifier(std::move(id)), is_array_param(is_arr) {}
 
   std::string toString(int indentLevel = 0) const override {
     std::ostringstream oss;
-    oss << indent(indentLevel)
-        << "FuncParamNode (Type: int, Name: " << identifier.lexeme
+    oss << indent(indentLevel) << "FuncParamNode (Name: " << identifier.lexeme
+        << ", Type: " << type_token.lexeme << (is_array_param ? "[]" : "")
         << ", Line: " << line_number << ")\n";
     return oss.str();
   }

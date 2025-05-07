@@ -339,9 +339,36 @@ std::vector<std::unique_ptr<FuncParamNode>> Parser::parseFuncFParams() {
 }
 
 std::unique_ptr<FuncParamNode> Parser::parseFuncFParam() {
-  Token btype_tok = expectToken(TokenType::INT_KW); // BType is 'int'
-  Token ident_tok = expectToken(TokenType::IDENT);
-  return std::make_unique<FuncParamNode>(btype_tok.line, ident_tok);
+  // FuncFParam -> BType Ident [ '[' ']' { '[' ConstExp ']' } ]
+  // For Phase 1, we only support BType Ident [ '[' ']' ]
+
+  Token btype_token = expectToken(TokenType::INT_KW); // BType is 'int'
+  Token ident_token = expectToken(TokenType::IDENT);
+  int line_for_node =
+      btype_token
+          .line; // Or ident_token.line, depends on desired line number source
+
+  bool is_array = false;
+  // std::vector<std::unique_ptr<Expression>> higher_dims; // For future
+  // multi-dim support
+
+  if (matchToken(TokenType::LBRACKET)) { // Consumes '[' if present
+    // For Phase 1, we expect an immediate ']' for a simple array parameter like
+    // 'name[]'
+    expectToken(TokenType::RBRACKET); // Consumes ']'
+    is_array = true;
+
+    // Future (Phase 2) logic for handling more dimensions like name[][ConstExp]
+    // would go here: while (matchToken(TokenType::LBRACKET)) {
+    //   higher_dims.push_back(parseConstExp());
+    //   expectToken(TokenType::RBRACKET);
+    // }
+  }
+
+  // Constructor for FuncParamNode (from ast.h) is:
+  // FuncParamNode(int line, Token type_tok, Token id, bool is_arr)
+  return std::make_unique<FuncParamNode>(line_for_node, btype_token,
+                                         ident_token, is_array);
 }
 
 std::unique_ptr<MainFuncDefNode> Parser::parseMainFuncDef() {
@@ -483,15 +510,14 @@ std::unique_ptr<Statement> Parser::parseStmt() {
     Token semi_token = consumeToken(); // Consume ';'
     return std::make_unique<ExprStmtNode>(semi_token.line, std::nullopt);
   }
-  // Case 9: Assignment, GetInt, or Expression Statement
+  // Case 9: Assignment or Expression Statement (LVal = getint() is now part of
+  // normal assignment)
   else {
-    int expr_line =
-        currentToken()
-            .line; // Line number of the potential start of the statement
-    // Keep a reference to the starting token of the expression for better error
-    // reporting if LHS is not LVal
-    Token expression_start_token = currentToken();
-    std::unique_ptr<Expression> expr_node = parseExp();
+    int expr_line = currentToken().line;
+    Token expression_start_token =
+        currentToken(); // For error reporting if LHS is not LVal
+    std::unique_ptr<Expression> expr_node =
+        parseExp(); // This will be the LVal on LHS
 
     if (matchToken(TokenType::ASSIGN)) { // Consumed '=' if present
       if (!expr_node) {
@@ -499,36 +525,32 @@ std::unique_ptr<Statement> Parser::parseStmt() {
               expression_start_token);
       }
 
+      // Check if the parsed expression is actually an LValNode
       LValNode *lval_raw_ptr = dynamic_cast<LValNode *>(expr_node.get());
       if (!lval_raw_ptr) {
         error(
             "Left-hand side of assignment (before '=') is not a valid LValue.",
             expression_start_token);
       }
-
+      // If it is, release it from expr_node and take ownership in lval_node
       std::unique_ptr<LValNode> lval_node(
           static_cast<LValNode *>(expr_node.release()));
-      // int assign_line = lval_node->line_number; // Or use
-      // expression_start_token.line
 
-      if (matchToken(TokenType::GETINT_KW)) { // Consumed 'getint' if present
-        Token getint_token = tokens[current_token_idx - 1]; // The getint token
-        expectToken(TokenType::LPAREN);
-        expectToken(TokenType::RPAREN);
-        expectToken(TokenType::SEMICOLON);
-        return std::make_unique<GetIntStmtNode>(getint_token.line,
-                                                std::move(lval_node));
-      } else {
-        std::unique_ptr<Expression> rhs_expr = parseExp();
-        expectToken(TokenType::SEMICOLON);
-        return std::make_unique<AssignStmtNode>(
-            lval_node->line_number, std::move(lval_node), std::move(rhs_expr));
-      }
+      // The special check for GETINT_KW after ASSIGN is removed here.
+      // The RHS is now always parsed as a general expression by parseExp().
+      std::unique_ptr<Expression> rhs_expr =
+          parseExp(); // This will parse getint() into a FunctionCallNode if
+                      // applicable
+      expectToken(TokenType::SEMICOLON);
+      return std::make_unique<AssignStmtNode>(
+          lval_node->line_number, // Or use expression_start_token.line
+          std::move(lval_node), std::move(rhs_expr));
+
     } else if (checkCurrentTokenType(
                    TokenType::SEMICOLON)) { // If ';' follows the expression
+                                            // (Expression Statement)
       consumeToken();                       // Consume ';'
-      if (!expr_node) { // Should not happen if parseExp worked and it wasn't an
-                        // empty line before ';' that got misinterp.
+      if (!expr_node) {
         error("Internal error: null expression before semicolon for expression "
               "statement.",
               expression_start_token);
@@ -540,7 +562,7 @@ std::unique_ptr<Statement> Parser::parseStmt() {
                 tokenTypeToString(currentToken().type) + " ('" +
                 currentToken().lexeme + "')",
             currentToken());
-      return nullptr;
+      return nullptr; // Should be unreachable
     }
   }
 }
@@ -558,14 +580,19 @@ std::unique_ptr<LValNode> Parser::parseLVal() {
 }
 
 std::unique_ptr<Expression> Parser::parseExp() {
-  // Exp -> AddExp
-  return parseAddExp();
+  // Exp should be the entry point for the full expression hierarchy,
+  // starting from the lowest precedence operator (Logical OR).
+  // Exp -> LOrExp (if we allow logical ops in general expressions)
+  // Original was Exp -> AddExp, which was incorrect for handling operators
+  // with lower precedence than Add/Sub.
+  return parseLOrExp();
 }
 
 std::unique_ptr<Expression> Parser::parseConstExp() {
-  // ConstExp -> AddExp
-  // Semantic check (Ident must be const) is done later.
-  return parseAddExp();
+  // ConstExp -> Exp (semantically checked later)
+  // We still parse it as a full expression, starting from LOrExp.
+  // The semantic checker will later verify if it evaluates to a constant.
+  return parseLOrExp();
 }
 
 std::unique_ptr<Expression> Parser::parseCond() {
@@ -660,8 +687,8 @@ std::unique_ptr<Expression> Parser::parseMulExp() {
 }
 
 std::unique_ptr<Expression> Parser::parseUnaryExp() {
-  // UnaryExp → PrimaryExp | Ident '(' [FuncRParams] ')' | UnaryOp UnaryExp
-  // UnaryOp → '+' | '−' | '!'
+  // UnaryExp → PrimaryExp | Ident '(' [FuncRParams] ')' | Getint '(' ')' |
+  // UnaryOp UnaryExp UnaryOp → '+' | '−' | '!'
   int line = currentToken().line;
 
   // Case 1: UnaryOp UnaryExp
@@ -669,21 +696,27 @@ std::unique_ptr<Expression> Parser::parseUnaryExp() {
       checkCurrentTokenType(TokenType::MINUS) ||
       checkCurrentTokenType(TokenType::LOGICAL_NOT)) {
     Token op_token = consumeToken();
-    auto operand = parseUnaryExp();
+    auto operand = parseUnaryExp(); // Recursive call for unary op
     return std::make_unique<UnaryOpNode>(op_token, std::move(operand));
   }
-  // Case 2: Ident '(' [FuncRParams] ')' - Function Call
-  else if (checkCurrentTokenType(TokenType::IDENT) &&
+  // Case 2: Function Call (Ident '(' [FuncRParams] ')' OR Getint '(' ')')
+  else if ((checkCurrentTokenType(TokenType::IDENT) ||
+            checkCurrentTokenType(TokenType::GETINT_KW)) &&
            checkPeekTokenType(TokenType::LPAREN)) {
-    Token func_ident_token = consumeToken();
+    Token func_name_token = consumeToken(); // Consume IDENT or GETINT_KW
+
     expectToken(TokenType::LPAREN);
     std::vector<std::unique_ptr<Expression>> args;
-    if (!checkCurrentTokenType(TokenType::RPAREN)) {
-      args = parseFuncRParams();
+
+    if (func_name_token.type == TokenType::GETINT_KW) {
+      // getint() has no arguments. Ensure RPAREN follows.
+    } else { // IDENT case, parse arguments if any
+      if (!checkCurrentTokenType(TokenType::RPAREN)) {
+        args = parseFuncRParams();
+      }
     }
     expectToken(TokenType::RPAREN);
-    return std::make_unique<FunctionCallNode>(func_ident_token,
-                                              std::move(args));
+    return std::make_unique<FunctionCallNode>(func_name_token, std::move(args));
   }
   // Case 3: PrimaryExp
   else {

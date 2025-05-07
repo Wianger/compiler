@@ -1,8 +1,8 @@
 #include "lexer.h"
-#include <cctype>    // For isalpha, isdigit, isspace
+#include <cctype> // For isalpha, isdigit, isspace
+#include <iostream>
 #include <stdexcept> // For error reporting
 #include <unordered_map>
-
 // Keyword map
 static std::unordered_map<std::string, TokenType> keywords = {
     {"const", TokenType::CONST_KW},
@@ -46,8 +46,7 @@ void Lexer::advance() {
 }
 
 void Lexer::skipWhitespace() {
-  while (currentChar() != '\0' &&
-         std::isspace(static_cast<unsigned char>(currentChar()))) {
+  while (current_pos < source_code.length() && std::isspace(currentChar())) {
     advance();
   }
 }
@@ -55,7 +54,7 @@ void Lexer::skipWhitespace() {
 void Lexer::skipComments() {
   // Single-line comment: // ...
   if (currentChar() == '/' && peekChar() == '/') {
-    while (currentChar() != '\0' && currentChar() != '\n') {
+    while (current_pos < source_code.length() && currentChar() != '\n') {
       advance();
     }
     // advance(); // consume the newline if not EOF
@@ -65,7 +64,7 @@ void Lexer::skipComments() {
   if (currentChar() == '/' && peekChar() == '*') {
     advance(); // consume /
     advance(); // consume *
-    while (currentChar() != '\0' &&
+    while (current_pos < source_code.length() &&
            !(currentChar() == '*' && peekChar() == '/')) {
       advance();
     }
@@ -83,7 +82,7 @@ void Lexer::skipComments() {
 Token Lexer::readIdentifierOrKeyword() {
   std::string lexeme_str;
   int start_col = current_col;
-  while (currentChar() != '\0' &&
+  while (current_pos < source_code.length() &&
          (std::isalnum(static_cast<unsigned char>(currentChar())) ||
           currentChar() == '_')) {
     lexeme_str += currentChar();
@@ -102,8 +101,7 @@ Token Lexer::readNumber() {
   // For simplicity, SysY grammar only mentions IntConst, not floats or
   // hex/octal. It also doesn't explicitly mention negative numbers as a single
   // token, but '-' will be a separate token. Parser will handle unary minus.
-  while (currentChar() != '\0' &&
-         std::isdigit(static_cast<unsigned char>(currentChar()))) {
+  while (current_pos < source_code.length() && std::isdigit(currentChar())) {
     num_str += currentChar();
     advance();
   }
@@ -124,7 +122,7 @@ Token Lexer::readFormatString() {
   }
   advance(); // Consume the opening "
 
-  while (currentChar() != '\0' && currentChar() != '"') {
+  while (current_pos < source_code.length() && currentChar() != '"') {
     char c = currentChar();
     if (c == '%') {
       if (peekChar() == 'd') {
@@ -276,9 +274,10 @@ Token Lexer::processOperatorOrPunctuator() {
 
 Token Lexer::getNextToken() {
   skipWhitespace();
-  skipComments();   // Handle comments after whitespace, as comments can start
-                    // anywhere
-  skipWhitespace(); // Whitespace might appear after comments
+  while (currentChar() == '/' && (peekChar() == '*' || peekChar() == '/')) {
+    skipComments();
+    skipWhitespace();
+  }
 
   if (current_pos >= source_code.length()) {
     return Token(TokenType::END_OF_FILE, "", current_line, current_col);
@@ -287,11 +286,11 @@ Token Lexer::getNextToken() {
   char ch = currentChar();
   int start_col = current_col; // Store start column for the token
 
-  if (std::isalpha(static_cast<unsigned char>(ch)) || ch == '_') {
+  if (std::isalpha(ch) || ch == '_') {
     return readIdentifierOrKeyword();
   }
 
-  if (std::isdigit(static_cast<unsigned char>(ch))) {
+  if (std::isdigit(ch)) {
     return readNumber();
   }
 
@@ -320,18 +319,8 @@ Token Lexer::getNextToken() {
   case '}':
   case ',':
   case ';':
-    return processOperatorOrPunctuator();
   case '/': // Could be division or start of a comment
-    if (peekChar() == '/' || peekChar() == '*') {
-      // This case should be handled by skipComments, but as a fallback:
-      // If skipComments was not thorough or called at wrong place.
-      // However, skipComments is called at the beginning of getNextToken.
-      // So, if we reach here with '/', it must be division.
-      advance();
-      return Token(TokenType::DIVIDE, "/", current_line, start_col);
-    }
-    advance();
-    return Token(TokenType::DIVIDE, "/", current_line, start_col);
+    return processOperatorOrPunctuator();
 
   default:
     // Unknown character
