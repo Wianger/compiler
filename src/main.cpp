@@ -1,5 +1,7 @@
+#include "ast.h" // Include AST nodes (needed for CompUnitNode and toString methods)
 #include "lexer.h"
-#include "token.h" // For tokenTypeToString
+#include "parser.h" // Include Parser
+#include "token.h"
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -25,20 +27,55 @@ int main(int argc, char *argv[]) {
   std::string source_filepath = argv[1];
   std::string source_code = readFile(source_filepath);
 
-  if (source_code.empty() &&
-      source_filepath !=
-          "/dev/null") { // Allow /dev/null for empty input testing
+  if (source_code.empty() && source_filepath != "/dev/null") {
     std::cerr << "Source code is empty or file could not be read." << std::endl;
     return 1;
   }
 
+  std::cout << "--- Lexing ---" << std::endl;
   Lexer lexer(source_code);
-  std::vector<Token> tokens = lexer.tokenize();
+  std::vector<Token> tokens;
+  try {
+    tokens = lexer.tokenize();
+    // Optional: Print tokens for debugging lexer
+    // for (const auto& token : tokens) {
+    //     std::cout << "Token: " << tokenTypeToString(token.type)
+    //               << ", Lexeme: '" << token.lexeme
+    //               << "', Line: " << token.line
+    //               << ", Column: " << token.column << std::endl;
+    // }
+  } catch (const std::runtime_error
+               &e) { // Catch potential errors from lexer (e.g. NumberNode stoi)
+    std::cerr << "Lexical Error: " << e.what() << std::endl;
+    return 1;
+  }
+  std::cout << "Lexing completed. Number of tokens: " << tokens.size()
+            << std::endl;
+  std::cout << "\n--- Parsing ---" << std::endl;
 
-  for (const auto &token : tokens) {
-    std::cout << "Token: " << tokenTypeToString(token.type) << ", Lexeme: '"
-              << token.lexeme << "', Line: " << token.line
-              << ", Column: " << token.column << std::endl;
+  Parser parser(tokens);
+  std::unique_ptr<CompUnitNode> ast_root = nullptr;
+  try {
+    ast_root = parser.parse();
+    std::cout << "Parsing completed successfully." << std::endl;
+
+    if (ast_root) {
+      std::cout << "\n--- Abstract Syntax Tree (AST) ---" << std::endl;
+      std::cout << ast_root->toString() << std::endl;
+    } else {
+      std::cerr << "Parsing finished, but AST root is null (this might "
+                   "indicate an issue)."
+                << std::endl;
+    }
+
+  } catch (const ParseError &e) {
+    std::cerr << "Syntax Error: " << e.what() << std::endl;
+    return 1; // Indicate failure
+  } catch (const std::runtime_error
+               &e) { // Catch other potential runtime errors (e.g. from
+                     // NumberNode stoi called during parsing)
+    std::cerr << "Runtime Error during parsing: " << e.what() << std::endl;
+    return 1;
   }
 
   return 0;

@@ -13,6 +13,7 @@ add_executable(compiler
     src/main.cpp 
     src/lexer.cpp 
     src/token.cpp
+    src/parser.cpp
 )
 
 # 指定头文件所在的目录
@@ -28,5 +29,5 @@ target_include_directories(compiler PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 # 打印一条消息，指示 CMake 配置完成
 message(STATUS "CMake configuration for SysYCompiler completed.")
 message(STATUS "Executable target: compiler")
-message(STATUS "Source files: src/main.cpp, src/lexer.cpp, src/token.cpp")
+message(STATUS "Source files: src/main.cpp, src/lexer.cpp, src/token.cpp, src/parser.cpp")
 message(STATUS "Include directory: ${CMAKE_CURRENT_SOURCE_DIR}/src") 
