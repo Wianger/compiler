@@ -102,7 +102,8 @@ Token Lexer::lexOperator() {
 void Lexer::tokenize() {
   while (position < source.size()) {
     skipWhitespace();
-    while (position < source.size() && currentChar() == '/') {
+    while (position < source.size() && currentChar() == '/' &&
+           (peekChar(1) == '/' || peekChar(1) == '*')) {
       skipComment();
       skipWhitespace();
     }
