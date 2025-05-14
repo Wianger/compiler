@@ -1,4 +1,4 @@
-int fib(int i) {
+int fib(int i){
     if (i == 1) {
         return 1;
     }
@@ -7,9 +7,8 @@ int fib(int i) {
     }
     return fib(i - 1) + fib(i - 2);
 }
-
-int main() {
-    int i = 2, j = 5;
+int main () {
+    int i = 2,j = 5;
     i = getint();
     j = getint();
     //const int a[3][2] = {{1,2},{2,3},{3,4}};
