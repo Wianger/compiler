@@ -1,8 +1,6 @@
 #include "../include/lexer.h"
 #include <cctype>
 
-Lexer::Lexer(std::string &source) : source(std::move(source)), position(0) {}
-
 const std::vector<Token> &Lexer::getTokens() const { return tokens; }
 
 char Lexer::currentChar() const {
@@ -99,7 +97,7 @@ Token Lexer::lexOperator() {
   return {op, TokenType::ERROR};
 }
 
-void Lexer::tokenize() {
+std::vector<Token> Lexer::tokenize() {
   while (position < source.size()) {
     skipWhitespace();
     while (position < source.size() && currentChar() == '/' &&
@@ -114,11 +112,13 @@ void Lexer::tokenize() {
     } else if (currentChar() == '"') {
       tokens.push_back(lexString());
     } else if (operators.find(std::string(1, currentChar())) !=
-               operators.end()) {
+                   operators.end() ||
+               currentChar() != '&' || currentChar() != '|') {
       tokens.push_back(lexOperator());
     } else if (currentChar() != '\0') {
       tokens.push_back({std::string(1, currentChar()), TokenType::ERROR});
       advance();
     }
   }
+  return tokens;
 }

@@ -1,3 +1,4 @@
+#pragma once
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -78,8 +79,8 @@ const std::unordered_map<std::string, TokenType> operators = {
 
 class Lexer {
 public:
-  Lexer(std::string &source);
-  void tokenize();                             // Tokenize the source code
+  Lexer(std::string &source) : source(std::move(source)), position(0) {}
+  std::vector<Token> tokenize();               // Tokenize the source code
   const std::vector<Token> &getTokens() const; // Get the list of tokens
 
 private:
