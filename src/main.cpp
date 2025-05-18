@@ -3,7 +3,7 @@
 #include <iostream>
 
 int main() {
-  std::ifstream file("../test/testfile18.txt");
+  std::ifstream file("../test/testfile1.txt");
   if (!file.is_open()) {
     std::cerr << "Error opening file" << std::endl;
     return 1;

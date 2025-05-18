@@ -11,9 +11,8 @@ class SymbolTable;
 
 class Symbol {
 public:
-  Symbol(const std::string &name, SymbolType type, bool isGlobal = false,
-         RetType retType = RetType::INT)
-      : name(name), type(type), isGlobal(isGlobal) {}
+  Symbol(const std::string &name, SymbolType type, bool isglobal = false)
+      : name(name), type(type), isGlobal(isglobal) {}
 
   std::string getName() const { return name; }
   SymbolType getType() const { return type; }
@@ -23,6 +22,27 @@ public:
   void setOffset(int off) { offset = off; }
   std::shared_ptr<SymbolTable> getTable() const { return table; }
   void setTable(std::shared_ptr<SymbolTable> tbl) { table = tbl; }
+  int getValue() const { return value; }
+  std::vector<int> getArray() const { return array; }
+  void setSize(int sz) { size = sz; }
+  void setValue(int val) {
+    isInit = true;
+    value = val;
+  }
+  void setArray(const std::vector<int> &arr) {
+    isInit = true;
+    array = arr;
+  }
+  int getSize() const { return size; }
+  void setRetType(RetType ret) { retType = ret; }
+  bool isInitValue() const { return isInit; }
+  void setStr(const std::string &s) {
+    isInit = true;
+    str = s;
+  }
+  std::string getStr() const { return str; }
+  void setBlockSize(int size) { blockSize = size; }
+  int getBlockSize() const { return blockSize; }
 
 private:
   std::string name;
@@ -30,6 +50,12 @@ private:
   RetType retType;
   bool isGlobal;
   int offset = 0;
+  bool isInit = false;
+  int value = 0;
+  int size = 0;
+  int blockSize = 0;
+  std::vector<int> array;
+  std::string str;
   std::shared_ptr<SymbolTable> table;
 };
 
@@ -37,14 +63,13 @@ class SymbolTable {
 public:
   SymbolTable(std::shared_ptr<SymbolTable> st = nullptr)
       : parent(st), offset(0) {}
-  void insert(const std::string &name, std::shared_ptr<Symbol> symbol,
-              int size = 0) {
+  void insert(const std::string &name, std::shared_ptr<Symbol> symbol) {
     if (find(name) != nullptr)
       throw std::runtime_error("Duplicate declaration of " + name);
     if (symbol->getType() != SymbolType::FUNC && !symbol->isGlobalVar()) {
       if (symbol->getType() == SymbolType::ARRAY) {
         symbol->setOffset(offset);
-        offset += 4 * size;
+        offset += 4 * symbol->getSize();
       } else {
         symbol->setOffset(offset);
         offset += 4;
@@ -72,6 +97,9 @@ public:
     children.push_back(child);
   }
   std::shared_ptr<SymbolTable> getParent() const { return parent; }
+  std::unordered_map<std::string, std::shared_ptr<Symbol>> getTable() {
+    return table;
+  }
 
 private:
   std::unordered_map<std::string, std::shared_ptr<Symbol>> table;

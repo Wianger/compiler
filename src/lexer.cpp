@@ -70,9 +70,9 @@ Token Lexer::lexString() {
     if (currentChar() == '\\') {
       advance(); // Skip the '\'
       if (currentChar() == 'n')
-        str += '\n';
+        str += "\\n";
       else if (currentChar() == 't')
-        str += '\t';
+        str += "\\t";
       else
         str += currentChar();
     } else {

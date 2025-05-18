@@ -90,30 +90,31 @@ void Parser::splitStringByDelimiter(const std::string &str,
                                     const std::string &delimiter) {
   size_t start = 0;
   size_t end = str.find(delimiter);
-  std::vector<std::string> params;
   while (end != std::string::npos) {
     std::string token = str.substr(start, end - start);
     std::string name = "printfstr" + std::to_string(getPrintfStrCount());
-    currentTable->insert(name,
-                         std::make_shared<Symbol>(name, SymbolType::STR, true));
-    params.push_back(name);
+    Symbol symbol(name, SymbolType::STR, true);
+    symbol.setStr(token);
+    root->insert(name, std::make_shared<Symbol>(symbol));
+    emit("param", name);
+    emit("call", "printf");
     consume(TokenType::COMMA);
     auto exp = AddExp();
     std::string exp_value = (exp.first == ExpType::Num)
                                 ? std::to_string(exp.second)
                                 : "t" + std::to_string(exp.second);
-    params.push_back(exp_value);
+    emit("param", exp_value);
+    emit("call", "printf");
     start = end + delimiter.length();
     end = str.find(delimiter, start);
   }
   std::string lastToken = str.substr(start, end);
   std::string name = "printfstr" + std::to_string(getPrintfStrCount());
-  currentTable->insert(name,
-                       std::make_shared<Symbol>(name, SymbolType::STR, true));
-  params.push_back(name);
-  for (const auto &param : params)
-    emit("param", param);
-  emit("call", "printf", std::to_string(params.size()));
+  Symbol symbol(name, SymbolType::STR, true);
+  symbol.setStr(lastToken);
+  root->insert(name, std::make_shared<Symbol>(symbol));
+  emit("param", name);
+  emit("call", "printf");
 }
 
 void Parser::emit(const std::string &op, const std::string &arg1,
@@ -173,6 +174,8 @@ std::vector<Quadruple> Parser::parse() {
 }
 
 void Parser::CompUnit() {
+  enterScope();
+  root = currentTable;
   while (position < tokens.size() &&
          (match(TokenType::CONSTTK) ||
           (match(TokenType::INTTK) && !match(TokenType::LPARENT, 2))))
@@ -208,37 +211,59 @@ void Parser::Decl(bool isglobal) {
         throw std::runtime_error("Array size must be a constant");
       consume(TokenType::RBRACK);
     }
-    currentTable->insert(name, std::make_shared<Symbol>(name, type, isglobal),
-                         size);
+    Symbol symbol(name, type, isglobal);
+    symbol.setSize(size);
     if (match(TokenType::ASSIGN)) {
       consume(TokenType::ASSIGN);
       if (match(TokenType::LBRACE)) {
         consume(TokenType::LBRACE);
+        std::vector<int> array;
+        bool can_init = true;
+        std::vector<std::pair<ExpType, int>> init_values;
         if (!match(TokenType::RBRACE)) {
           int index = 0;
           auto exp = AddExp();
-          std::string exp_value = (exp.first == ExpType::Num)
-                                      ? std::to_string(exp.second)
-                                      : "t" + std::to_string(exp.second);
-          emit("[]=", name, std::to_string(index), exp_value);
+          init_values.push_back(exp);
+          if (exp.first == ExpType::Num)
+            array.push_back(exp.second);
+          else
+            can_init = false;
           while (match(TokenType::COMMA)) {
             consume(TokenType::COMMA);
             auto exp = AddExp();
-            std::string exp_value = (exp.first == ExpType::Num)
-                                        ? std::to_string(exp.second)
-                                        : "t" + std::to_string(exp.second);
-            emit("[]=", name, std::to_string(++index), exp_value);
+            init_values.push_back(exp);
+            if (exp.first == ExpType::Num)
+              array.push_back(exp.second);
+            else
+              can_init = false;
+          }
+        }
+        if (can_init) {
+          symbol.setArray(array);
+        } else if (!isglobal || !can_init) {
+          int index = 0;
+          for (const auto &init_value : init_values) {
+            std::string exp_value =
+                (init_value.first == ExpType::Num)
+                    ? std::to_string(init_value.second)
+                    : "t" + std::to_string(init_value.second);
+            emit("[]=", name, std::to_string(index), exp_value);
+            index++;
           }
         }
         consume(TokenType::RBRACE);
       } else {
         auto exp = AddExp();
-        std::string exp_value = (exp.first == ExpType::Num)
-                                    ? std::to_string(exp.second)
-                                    : "t" + std::to_string(exp.second);
-        emit("=", name, exp_value);
+        auto exp_value = (exp.first == ExpType::Num)
+                             ? std::to_string(exp.second)
+                             : "t" + std::to_string(exp.second);
+        if (exp.first == ExpType::Num)
+          symbol.setValue(exp.second);
+        if (!isglobal || !(exp.first == ExpType::Num))
+          emit("=", name, exp_value);
       }
     }
+    currentTable->insert(name, std::make_shared<Symbol>(symbol));
     if (match(TokenType::COMMA))
       consume(TokenType::COMMA);
   }
@@ -256,21 +281,24 @@ void Parser::FuncDef() {
   std::string name = currentToken().first;
   consume(TokenType::IDENFR);
   consume(TokenType::LPARENT);
-  emit("func", name);
   std::vector<std::string> params;
   while (match(TokenType::INTTK)) {
     consume(TokenType::INTTK);
     std::string paramName = currentToken().first;
-    emit("param", paramName);
     params.push_back(paramName);
     consume(TokenType::IDENFR);
     if (match(TokenType::COMMA))
       consume(TokenType::COMMA);
   }
+  emit("func", name, std::to_string(params.size()));
+  for (const auto &param : params) {
+    emit("param", param);
+  }
   consume(TokenType::RPARENT);
-  currentTable->insert(
-      name, std::make_shared<Symbol>(name, SymbolType::FUNC, false, retType));
-  Block(true, params);
+  Symbol symbol(name, SymbolType::FUNC, false);
+  symbol.setRetType(retType);
+  currentTable->insert(name, std::make_shared<Symbol>(symbol));
+  Block(name, true, params);
   emit("endfunc", name);
 }
 
@@ -279,15 +307,16 @@ void Parser::MainFuncDef() {
   consume(TokenType::MAINTK);
   consume(TokenType::LPARENT);
   consume(TokenType::RPARENT);
-  emit("func", "main");
-  currentTable->insert(
-      "main",
-      std::make_shared<Symbol>("main", SymbolType::FUNC, false, RetType::INT));
-  Block();
+  emit("func", "main", "0");
+  Symbol symbol("main", SymbolType::FUNC, false);
+  symbol.setRetType(RetType::INT);
+  currentTable->insert("main", std::make_shared<Symbol>(symbol));
+  Block("main", true);
   emit("endfunc", "main");
 }
 
-void Parser::Block(bool isfunc, std::vector<std::string> params) {
+void Parser::Block(std::string name, bool isfunc,
+                   std::vector<std::string> params) {
   consume(TokenType::LBRACE);
   enterScope();
   if (isfunc) {
@@ -303,6 +332,13 @@ void Parser::Block(bool isfunc, std::vector<std::string> params) {
       Stmt();
   }
   consume(TokenType::RBRACE);
+  if (isfunc) {
+    int blockSize = currentTable->Offset();
+    auto parent = currentTable->getParent();
+    auto symbol = parent->lookup(name);
+    if (symbol != nullptr)
+      symbol->setBlockSize(blockSize);
+  }
   exitScope();
 }
 
@@ -421,7 +457,6 @@ void Parser::Stmt(int startlabel, int endlabel) {
       }
     } catch (const std::exception &e) {
       position = temp_pos;
-      std::cout << "Error: " << e.what() << std::endl;
       if (!match(TokenType::SEMICN))
         AddExp();
       consume(TokenType::SEMICN);
@@ -554,6 +589,7 @@ std::pair<ExpType, int> Parser::UnaryExp() {
           for (const auto &param : params)
             emit("param", param);
           emit("call", name, std::to_string(params.size()));
+          consume(TokenType::RPARENT);
         } else {
           for (const auto &param : params)
             emit("param", param);
@@ -747,8 +783,8 @@ void Parser::preprocess() {
     } else if (match(TokenType::IDENFR) && !match(TokenType::LBRACK, 1) &&
                const_vars.find(currentToken().first) != const_vars.end()) {
       Token &token = tokens[position];
-      consume(TokenType::IDENFR);
       token.first = std::to_string(const_vars[currentToken().first]);
+      consume(TokenType::IDENFR);
       token.second = TokenType::INTCON;
     } else
       position++;

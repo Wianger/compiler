@@ -1,6 +1,7 @@
 const int ArrLen = 20;
 int arr[ArrLen];
 int result[ArrLen];
+int a[3] = {1, 2, 3};
 
 void merge(int start, int mid, int end) {
     int k = 0;

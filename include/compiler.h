@@ -1,4 +1,5 @@
 #include "lexer.h"
+#include "mips.h"
 #include "parser.h"
 
 class Compiler {

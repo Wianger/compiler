@@ -1,3 +1,4 @@
+#pragma once
 #include "lexer.h"
 #include "symbol_table.h"
 
@@ -18,6 +19,7 @@ public:
     currentTable = std::make_shared<SymbolTable>();
   }
   std::vector<Quadruple> parse();
+  std::shared_ptr<SymbolTable> getSymbolTable() { return root; }
 
 private:
   std::vector<Token> tokens;
@@ -26,6 +28,7 @@ private:
   int tempCount;
   int labelCount;
   int printfstrCount;
+  std::shared_ptr<SymbolTable> root;
   std::shared_ptr<SymbolTable> currentTable;
 
   Token currentToken() const;
@@ -47,7 +50,8 @@ private:
   void Decl(bool);
   void FuncDef();
   void MainFuncDef();
-  void Block(bool isfunc = false, std::vector<std::string> params = {});
+  void Block(std::string name = "", bool isfunc = false,
+             std::vector<std::string> params = {});
   void Stmt(int startlabel = 0, int endlabel = 0);
   std::pair<ExpType, int> AddExp();
   std::pair<ExpType, int> LOrExp();
