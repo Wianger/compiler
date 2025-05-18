@@ -43,6 +43,15 @@ public:
   std::string getStr() const { return str; }
   void setBlockSize(int size) { blockSize = size; }
   int getBlockSize() const { return blockSize; }
+  void setScopeTable(std::shared_ptr<SymbolTable> st) {
+    if (type == SymbolType::FUNC)
+      scopeTable = st;
+  }
+  std::shared_ptr<SymbolTable> getScopeTable() const {
+    if (type == SymbolType::FUNC)
+      return scopeTable;
+    return nullptr;
+  }
 
 private:
   std::string name;
@@ -57,6 +66,7 @@ private:
   std::vector<int> array;
   std::string str;
   std::shared_ptr<SymbolTable> table;
+  std::shared_ptr<SymbolTable> scopeTable;
 };
 
 class SymbolTable {
@@ -66,16 +76,18 @@ public:
   void insert(const std::string &name, std::shared_ptr<Symbol> symbol) {
     if (find(name) != nullptr)
       throw std::runtime_error("Duplicate declaration of " + name);
-    if (symbol->getType() != SymbolType::FUNC && !symbol->isGlobalVar()) {
+    if (symbol->getType() != SymbolType::FUNC && symbol->isGlobalVar()) {
       if (symbol->getType() == SymbolType::ARRAY) {
-        symbol->setOffset(offset);
-        offset += 4 * symbol->getSize();
-      } else {
-        symbol->setOffset(offset);
-        offset += 4;
+        symbol->setOffset(this->offset);
+        if (symbol->getType() == SymbolType::ARRAY) {
+          symbol->setOffset(offset);
+          offset += 4 * symbol->getSize();
+        } else {
+          symbol->setOffset(offset);
+          offset += 4;
+        }
       }
     }
-    symbol->setTable(std::make_shared<SymbolTable>(*this));
     table[name] = symbol;
   }
   std::shared_ptr<Symbol> find(const std::string &name) const {
@@ -99,6 +111,12 @@ public:
   std::shared_ptr<SymbolTable> getParent() const { return parent; }
   std::unordered_map<std::string, std::shared_ptr<Symbol>> getTable() {
     return table;
+  }
+  std::shared_ptr<SymbolTable> getLastAddedChild() const {
+    if (!children.empty()) {
+      return children.back();
+    }
+    return nullptr;
   }
 
 private:
