@@ -339,6 +339,13 @@ void Mips::buildin_func() {
 
 void Mips::generateTextSection() {
   this->text.push_back(".text");
+  // Add a jump to main as the very first executable instruction in the .text
+  // segment. This is to handle cases where the simulator starts at the
+  // beginning of the .text segment and the option "Initialize program counter
+  // to global 'main' if defined" is NOT set.
+  this->text.push_back(this->indent(1) + "j main");
+  this->text.push_back(this->indent(1) + "nop # Branch delay slot filler");
+
   this->text.push_back(".globl main");
 
   int currentArgReg = 0; // For outgoing call argument registers $a0-$a3
