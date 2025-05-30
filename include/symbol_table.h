@@ -53,6 +53,25 @@ public:
     return nullptr;
   }
 
+  // 新增：设置和获取数组维度
+  void setDimensions(const std::vector<int> &dims) { dimensions = dims; }
+  const std::vector<int> &getDimensions() const { return dimensions; }
+
+  // 新增：计算多维数组的总大小
+  int getTotalSize() const {
+    if (dimensions.empty()) {
+      // 如果没有维度信息，使用size字段（向后兼容）
+      return size > 0 ? size : 1;
+    }
+    int total = 1;
+    for (int dim : dimensions) {
+      if (dim > 0) { // 忽略参数中的-1维度（表示不确定大小）
+        total *= dim;
+      }
+    }
+    return total;
+  }
+
 private:
   std::string name;
   SymbolType type;
@@ -67,6 +86,9 @@ private:
   std::string str;
   std::shared_ptr<SymbolTable> table;
   std::shared_ptr<SymbolTable> scopeTable;
+
+  // 新增：存储数组的各个维度大小
+  std::vector<int> dimensions;
 };
 
 class SymbolTable {

@@ -267,7 +267,10 @@ void Parser::CompUnit() {
   else
     throw std::runtime_error("Main function not found");
 
-  blockBaseOffsetStack.pop_back(); // Pop global scope base offset
+  // 安全检查：确保在弹出前栈不为空
+  if (!blockBaseOffsetStack.empty()) {
+    blockBaseOffsetStack.pop_back(); // Pop global scope base offset
+  }
 }
 
 void Parser::Decl(bool isglobal,
@@ -284,23 +287,32 @@ void Parser::Decl(bool isglobal,
     consume(TokenType::IDENFR);
 
     SymbolType type = SymbolType::INT;
-    int size = 0; // For arrays
+    std::vector<int> dimensions; // 存储数组维度
 
-    if (match(TokenType::LBRACK)) {
+    // 处理可能存在的多个维度
+    while (match(TokenType::LBRACK)) {
       type = SymbolType::ARRAY;
       consume(TokenType::LBRACK);
       auto exp = AddExp();
       if (exp.first == ExpType::Num)
-        size = exp.second;
+        dimensions.push_back(exp.second);
       else
-        throw std::runtime_error("Array size must be a constant");
+        throw std::runtime_error("Array dimension must be a constant");
       consume(TokenType::RBRACK);
     }
 
     auto symbol = std::make_shared<Symbol>(name, type, isglobal);
-    symbol->setSize(size);
 
-    int symbolSizeOnStack = (type == SymbolType::ARRAY) ? (4 * size) : 4;
+    if (type == SymbolType::ARRAY) {
+      symbol->setDimensions(dimensions);
+      symbol->setSize(symbol->getTotalSize());
+    } else {
+      // 对于非数组类型，确保size为1（表示一个整数的大小）
+      symbol->setSize(1);
+    }
+
+    int symbolSizeOnStack =
+        (type == SymbolType::ARRAY) ? (4 * symbol->getTotalSize()) : 4;
 
     if (!isglobal) {
       symbol->setOffset(currentFuncArgAndLocalSize);
@@ -317,17 +329,67 @@ void Parser::Decl(bool isglobal,
         std::vector<std::pair<ExpType, int>> init_expressions;
 
         if (!match(TokenType::RBRACE)) {
-          do {
-            if (match(TokenType::COMMA))
-              consume(TokenType::COMMA);
-            auto exp = AddExp();
-            init_expressions.push_back(exp);
-            if (exp.first == ExpType::Num) {
-              array_values.push_back(exp.second);
-            } else {
-              can_init_statically = false;
-            }
-          } while (match(TokenType::COMMA));
+          // 处理一维数组或多维数组的第一层初始化
+          if (dimensions.size() == 1 || !match(TokenType::LBRACE)) {
+            // 一维数组直接初始化元素列表
+            do {
+              if (match(TokenType::COMMA))
+                consume(TokenType::COMMA);
+              auto exp = AddExp();
+              init_expressions.push_back(exp);
+              if (exp.first == ExpType::Num) {
+                array_values.push_back(exp.second);
+              } else {
+                can_init_statically = false;
+              }
+            } while (match(TokenType::COMMA));
+          } else {
+            // 处理多维数组（嵌套花括号）的情况
+            int outer_index = 0;
+            do {
+              if (match(TokenType::COMMA))
+                consume(TokenType::COMMA);
+
+              if (match(TokenType::LBRACE)) {
+                consume(TokenType::LBRACE);
+                int inner_index = 0;
+
+                if (!match(TokenType::RBRACE)) {
+                  do {
+                    if (match(TokenType::COMMA))
+                      consume(TokenType::COMMA);
+                    auto exp = AddExp();
+
+                    // 计算多维数组的偏移量：outer_index * 第二维大小 +
+                    // inner_index
+                    if (dimensions.size() > 1) {
+                      // 确保安全访问第二维度
+                      int second_dim =
+                          dimensions.size() > 1 ? dimensions[1] : 1;
+                      int flat_index = outer_index * second_dim + inner_index;
+
+                      if (exp.first == ExpType::Num) {
+                        // 扩展数组大小
+                        while (array_values.size() <= flat_index) {
+                          array_values.push_back(0);
+                        }
+                        array_values[flat_index] = exp.second;
+                      } else {
+                        can_init_statically = false;
+                      }
+
+                      // 构建初始化表达式，包含扁平索引和值
+                      init_expressions.push_back(exp);
+                      inner_index++;
+                    }
+                  } while (match(TokenType::COMMA));
+                }
+
+                consume(TokenType::RBRACE);
+                outer_index++;
+              }
+            } while (match(TokenType::COMMA));
+          }
         }
         consume(TokenType::RBRACE);
         if (can_init_statically && isglobal) {
@@ -339,13 +401,50 @@ void Parser::Decl(bool isglobal,
                 "Array symbol not found immediately after insertion: " +
                 symbol->getName());
           }
-          for (size_t i = 0; i < init_expressions.size(); ++i) {
-            std::string exp_val_str =
-                (init_expressions[i].first == ExpType::Num)
-                    ? std::to_string(init_expressions[i].second)
-                    : "t" + std::to_string(init_expressions[i].second);
-            emit("[]=", TacOperand(array_sym_for_emit),
-                 TacOperand(std::to_string(i)), TacOperand(exp_val_str));
+
+          // 多维数组初始化
+          if (dimensions.size() > 1 && init_expressions.size() > 0) {
+            // 对于动态初始化，需要逐个元素赋值
+            int expr_idx = 0;
+            for (size_t i = 0;
+                 i < dimensions[0] && expr_idx < init_expressions.size(); ++i) {
+              // 确保第二维大小有效
+              int second_dim_size = dimensions.size() > 1 ? dimensions[1] : 1;
+              for (size_t j = 0;
+                   j < second_dim_size && expr_idx < init_expressions.size();
+                   ++j) {
+                // 计算扁平索引
+                int flat_index = i * second_dim_size + j;
+
+                // 使用临时变量计算索引
+                int temp_idx = getTempVar();
+                emit("=", TacOperand(std::to_string(flat_index)), TacOperand(),
+                     TacOperand("t" + std::to_string(temp_idx)));
+
+                std::string exp_val_str =
+                    (init_expressions[expr_idx].first == ExpType::Num)
+                        ? std::to_string(init_expressions[expr_idx].second)
+                        : "t" +
+                              std::to_string(init_expressions[expr_idx].second);
+
+                // 使用计算出的扁平索引初始化数组元素
+                emit("[]=", TacOperand(array_sym_for_emit),
+                     TacOperand("t" + std::to_string(temp_idx)),
+                     TacOperand(exp_val_str));
+
+                expr_idx++;
+              }
+            }
+          } else {
+            // 一维数组初始化（原有代码）
+            for (size_t i = 0; i < init_expressions.size(); ++i) {
+              std::string exp_val_str =
+                  (init_expressions[i].first == ExpType::Num)
+                      ? std::to_string(init_expressions[i].second)
+                      : "t" + std::to_string(init_expressions[i].second);
+              emit("[]=", TacOperand(array_sym_for_emit),
+                   TacOperand(std::to_string(i)), TacOperand(exp_val_str));
+            }
           }
         }
       } else {
@@ -403,13 +502,46 @@ void Parser::FuncDef() {
     params_names.push_back(paramName);
     consume(TokenType::IDENFR);
 
-    // Create param symbol, its offset is relative to func area start
-    auto paramSymbol =
-        std::make_shared<Symbol>(paramName, SymbolType::INT, false);
+    // 默认为普通整型参数
+    SymbolType paramType = SymbolType::INT;
+    std::vector<int> dimensions;
+
+    // 检查是否是数组参数
+    if (match(TokenType::LBRACK)) {
+      paramType = SymbolType::ARRAY;
+      consume(TokenType::LBRACK);
+      consume(TokenType::RBRACK); // 数组参数第一维空，表示大小未知
+
+      dimensions.push_back(-1); // -1表示第一维大小未知
+
+      // 检查后续维度
+      if (match(TokenType::LBRACK)) {
+        consume(TokenType::LBRACK);
+        auto dim_exp = AddExp();
+        if (dim_exp.first != ExpType::Num) {
+          throw std::runtime_error("Array dimension must be constant");
+        }
+        dimensions.push_back(dim_exp.second);
+        consume(TokenType::RBRACK);
+      } else {
+        // 如果是一维数组参数，添加默认的第二维大小1
+        dimensions.push_back(1);
+      }
+    }
+
+    // 创建参数符号
+    auto paramSymbol = std::make_shared<Symbol>(paramName, paramType, false);
+
+    if (paramType == SymbolType::ARRAY) {
+      paramSymbol->setDimensions(dimensions);
+      // 数组参数只传递基址，实际只占用4字节
+      paramSymbol->setSize(1); // 作为指针，只占一个整数大小
+    }
+
     paramSymbol->setOffset(currentFuncArgAndLocalSize);
-    currentFuncArgAndLocalSize += 4;
-    funcActualScopeTable->insert(
-        paramName, paramSymbol); // Add param to function's own scope
+    currentFuncArgAndLocalSize += 4; // 普通参数或数组参数（指针）均占4字节
+
+    funcActualScopeTable->insert(paramName, paramSymbol);
     params_symbols.push_back(paramSymbol);
 
     if (match(TokenType::COMMA))
@@ -588,16 +720,18 @@ void Parser::Stmt(int startlabel_param, int endlabel_param,
     int temp_pos = position;
     try {
       std::string name_str = currentToken().first;
-      bool isArray = false;
-      std::pair<ExpType, int> index;
+      std::vector<std::pair<ExpType, int>> indices;
 
       consume(TokenType::IDENFR);
-      if (match(TokenType::LBRACK)) {
-        isArray = true;
+
+      // 收集所有维度的索引
+      while (match(TokenType::LBRACK)) {
         consume(TokenType::LBRACK);
-        index = AddExp();
+        auto index = AddExp();
+        indices.push_back(index);
         consume(TokenType::RBRACK);
       }
+
       consume(TokenType::ASSIGN);
 
       auto lhs_symbol = currentTable->lookup(name_str);
@@ -615,14 +749,71 @@ void Parser::Stmt(int startlabel_param, int endlabel_param,
         emit("call", TacOperand("getint"), TacOperand(),
              TacOperand(getint_temp_name));
 
-        if (isArray) {
-          std::string index_value_for_assign =
-              (index.first == ExpType::Num)
-                  ? std::to_string(index.second)
-                  : "t" + std::to_string(index.second);
-          emit("[]=", TacOperand(lhs_symbol),
-               TacOperand(index_value_for_assign),
-               TacOperand(getint_temp_name));
+        if (!indices.empty()) {
+          // 数组赋值
+          if (indices.size() == 1) {
+            // 一维数组赋值
+            std::string index_value_for_assign =
+                (indices[0].first == ExpType::Num)
+                    ? std::to_string(indices[0].second)
+                    : "t" + std::to_string(indices[0].second);
+            emit("[]=", TacOperand(lhs_symbol),
+                 TacOperand(index_value_for_assign),
+                 TacOperand(getint_temp_name));
+          } else if (indices.size() == 2) {
+            // 二维数组赋值
+            const auto &dimensions = lhs_symbol->getDimensions();
+            if (dimensions.size() < 2) {
+              throw std::runtime_error(
+                  "Invalid array dimensions for assignment: " + name_str);
+            }
+
+            // 计算多维数组的偏移量: row_index * col_size + col_index
+            int row_temp = getTempVar();
+            int col_temp = getTempVar();
+            int col_size_temp = getTempVar();
+            int final_index_temp = getTempVar();
+            int result_temp = getTempVar();
+
+            // 获取行索引和列索引
+            std::string row_index_str =
+                (indices[0].first == ExpType::Num)
+                    ? std::to_string(indices[0].second)
+                    : "t" + std::to_string(indices[0].second);
+
+            std::string col_index_str =
+                (indices[1].first == ExpType::Num)
+                    ? std::to_string(indices[1].second)
+                    : "t" + std::to_string(indices[1].second);
+
+            // 将行索引加载到临时变量
+            emit("=", TacOperand(row_index_str), TacOperand(),
+                 TacOperand("t" + std::to_string(row_temp)));
+
+            // 将列索引加载到临时变量
+            emit("=", TacOperand(col_index_str), TacOperand(),
+                 TacOperand("t" + std::to_string(col_temp)));
+
+            // 设置列大小（第二维的大小），确保安全访问
+            int col_size = dimensions.size() > 1 ? dimensions[1] : 1;
+            emit("=", TacOperand(std::to_string(col_size)), TacOperand(),
+                 TacOperand("t" + std::to_string(col_size_temp)));
+
+            // 计算：row_index * col_size
+            emit("*", TacOperand("t" + std::to_string(row_temp)),
+                 TacOperand("t" + std::to_string(col_size_temp)),
+                 TacOperand("t" + std::to_string(final_index_temp)));
+
+            // 计算：(row_index * col_size) + col_index
+            emit("+", TacOperand("t" + std::to_string(final_index_temp)),
+                 TacOperand("t" + std::to_string(col_temp)),
+                 TacOperand("t" + std::to_string(final_index_temp)));
+
+            // 使用计算出的索引设置数组元素
+            emit("[]=", TacOperand(lhs_symbol),
+                 TacOperand("t" + std::to_string(final_index_temp)),
+                 TacOperand(getint_temp_name));
+          }
         } else {
           emit("=", TacOperand(getint_temp_name), TacOperand(),
                TacOperand(lhs_symbol));
@@ -634,13 +825,70 @@ void Parser::Stmt(int startlabel_param, int endlabel_param,
         std::string exp_value_str = (exp.first == ExpType::Num)
                                         ? std::to_string(exp.second)
                                         : "t" + std::to_string(exp.second);
-        if (isArray) {
-          std::string index_value_for_assign =
-              (index.first == ExpType::Num)
-                  ? std::to_string(index.second)
-                  : "t" + std::to_string(index.second);
-          emit("[]=", TacOperand(lhs_symbol),
-               TacOperand(index_value_for_assign), TacOperand(exp_value_str));
+        if (!indices.empty()) {
+          // 数组赋值
+          if (indices.size() == 1) {
+            // 一维数组
+            std::string index_value_for_assign =
+                (indices[0].first == ExpType::Num)
+                    ? std::to_string(indices[0].second)
+                    : "t" + std::to_string(indices[0].second);
+            emit("[]=", TacOperand(lhs_symbol),
+                 TacOperand(index_value_for_assign), TacOperand(exp_value_str));
+          } else if (indices.size() == 2) {
+            // 二维数组
+            const auto &dimensions = lhs_symbol->getDimensions();
+            if (dimensions.size() < 2) {
+              throw std::runtime_error(
+                  "Invalid array dimensions for assignment: " + name_str);
+            }
+
+            // 计算多维数组的偏移量: row_index * col_size + col_index
+            int row_temp = getTempVar();
+            int col_temp = getTempVar();
+            int col_size_temp = getTempVar();
+            int final_index_temp = getTempVar();
+            int result_temp = getTempVar();
+
+            // 获取行索引和列索引
+            std::string row_index_str =
+                (indices[0].first == ExpType::Num)
+                    ? std::to_string(indices[0].second)
+                    : "t" + std::to_string(indices[0].second);
+
+            std::string col_index_str =
+                (indices[1].first == ExpType::Num)
+                    ? std::to_string(indices[1].second)
+                    : "t" + std::to_string(indices[1].second);
+
+            // 将行索引加载到临时变量
+            emit("=", TacOperand(row_index_str), TacOperand(),
+                 TacOperand("t" + std::to_string(row_temp)));
+
+            // 将列索引加载到临时变量
+            emit("=", TacOperand(col_index_str), TacOperand(),
+                 TacOperand("t" + std::to_string(col_temp)));
+
+            // 设置列大小（第二维的大小），确保安全访问
+            int col_size = dimensions.size() > 1 ? dimensions[1] : 1;
+            emit("=", TacOperand(std::to_string(col_size)), TacOperand(),
+                 TacOperand("t" + std::to_string(col_size_temp)));
+
+            // 计算：row_index * col_size
+            emit("*", TacOperand("t" + std::to_string(row_temp)),
+                 TacOperand("t" + std::to_string(col_size_temp)),
+                 TacOperand("t" + std::to_string(final_index_temp)));
+
+            // 计算：(row_index * col_size) + col_index
+            emit("+", TacOperand("t" + std::to_string(final_index_temp)),
+                 TacOperand("t" + std::to_string(col_temp)),
+                 TacOperand("t" + std::to_string(final_index_temp)));
+
+            // 使用计算出的索引设置数组元素
+            emit("[]=", TacOperand(lhs_symbol),
+                 TacOperand("t" + std::to_string(final_index_temp)),
+                 TacOperand(exp_value_str));
+          }
         } else {
           emit("=", TacOperand(exp_value_str), TacOperand(),
                TacOperand(lhs_symbol));
@@ -831,21 +1079,88 @@ std::pair<ExpType, int> Parser::PrimaryExp() {
                                name_str);
     }
 
-    if (match(TokenType::LBRACK)) {
+    // 收集所有的索引表达式
+    std::vector<std::pair<ExpType, int>> indices;
+
+    while (match(TokenType::LBRACK)) {
       consume(TokenType::LBRACK);
       auto index_exp = AddExp();
       consume(TokenType::RBRACK);
-      std::string index_value_str =
-          (index_exp.first == ExpType::Num)
-              ? std::to_string(index_exp.second)
-              : "t" + std::to_string(index_exp.second);
-      int tempVar = getTempVar();
-      // emit("=[]", name_str, index_value_str, "t" + std::to_string(tempVar));
-      // // OLD For "=[]", arg1 is array symbol, arg2 is index (string), result
-      // is temp (string)
-      emit("=[]", TacOperand(sym), TacOperand(index_value_str),
-           TacOperand("t" + std::to_string(tempVar))); // Updated
-      return {ExpType::Temp, tempVar};
+      indices.push_back(index_exp);
+    }
+
+    if (!indices.empty()) {
+      // 有索引，是数组访问
+      if (sym->getType() != SymbolType::ARRAY) {
+        throw std::runtime_error("Non-array variable used with index: " +
+                                 name_str);
+      }
+
+      const auto &dimensions = sym->getDimensions();
+
+      if (indices.size() == 1) {
+        // 一维数组访问
+        std::string index_value_str =
+            (indices[0].first == ExpType::Num)
+                ? std::to_string(indices[0].second)
+                : "t" + std::to_string(indices[0].second);
+        int tempVar = getTempVar();
+        emit("=[]", TacOperand(sym), TacOperand(index_value_str),
+             TacOperand("t" + std::to_string(tempVar)));
+        return {ExpType::Temp, tempVar};
+      } else if (indices.size() == 2 && dimensions.size() >= 2) {
+        // 二维数组访问
+        // 计算偏移量: row_index * col_size + col_index
+        int row_temp = getTempVar();
+        int col_temp = getTempVar();
+        int col_size_temp = getTempVar();
+        int final_index_temp = getTempVar();
+        int result_temp = getTempVar();
+
+        // 获取行索引和列索引
+        std::string row_index_str =
+            (indices[0].first == ExpType::Num)
+                ? std::to_string(indices[0].second)
+                : "t" + std::to_string(indices[0].second);
+
+        std::string col_index_str =
+            (indices[1].first == ExpType::Num)
+                ? std::to_string(indices[1].second)
+                : "t" + std::to_string(indices[1].second);
+
+        // 将行索引加载到临时变量
+        emit("=", TacOperand(row_index_str), TacOperand(),
+             TacOperand("t" + std::to_string(row_temp)));
+
+        // 将列索引加载到临时变量
+        emit("=", TacOperand(col_index_str), TacOperand(),
+             TacOperand("t" + std::to_string(col_temp)));
+
+        // 设置列大小（第二维的大小），确保安全访问
+        int col_size = dimensions.size() > 1 ? dimensions[1] : 1;
+        emit("=", TacOperand(std::to_string(col_size)), TacOperand(),
+             TacOperand("t" + std::to_string(col_size_temp)));
+
+        // 计算：row_index * col_size
+        emit("*", TacOperand("t" + std::to_string(row_temp)),
+             TacOperand("t" + std::to_string(col_size_temp)),
+             TacOperand("t" + std::to_string(final_index_temp)));
+
+        // 计算：(row_index * col_size) + col_index
+        emit("+", TacOperand("t" + std::to_string(final_index_temp)),
+             TacOperand("t" + std::to_string(col_temp)),
+             TacOperand("t" + std::to_string(final_index_temp)));
+
+        // 使用计算出的索引访问数组
+        emit("=[]", TacOperand(sym),
+             TacOperand("t" + std::to_string(final_index_temp)),
+             TacOperand("t" + std::to_string(result_temp)));
+
+        return {ExpType::Temp, result_temp};
+      } else {
+        throw std::runtime_error("Invalid array access dimensions for: " +
+                                 name_str);
+      }
     } else { // Simple variable access
       int tempVar = getTempVar();
       // emit("=", name_str, "", "t" + std::to_string(tempVar)); // OLD

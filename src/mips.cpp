@@ -112,10 +112,36 @@ std::string Mips::loadToReg(const TacOperand &src_op,
           this->tempStackSpace.count(this->currentFunctionName)
               ? this->tempStackSpace[this->currentFunctionName]
               : 0;
-      this->text.push_back(
-          this->indent(1) + "lw " + destReg + ", " +
-          std::to_string(symbol->getOffset() + baseOffsetForLocalsAndParams) +
-          "($fp) # Local/Param " + symbol->getName());
+
+      // 检查是否是数组参数（多维数组的第一维是-1）
+      if (symbol->getType() == SymbolType::ARRAY &&
+          !symbol->getDimensions().empty() &&
+          symbol->getDimensions()[0] == -1) {
+        // 数组参数是指向数组基址的指针，需要先加载指针值
+        this->text.push_back(
+            this->indent(1) + "lw " + destReg + ", " +
+            std::to_string(symbol->getOffset() + baseOffsetForLocalsAndParams) +
+            "($fp) # Array param " + symbol->getName());
+      } else if (symbol->getType() == SymbolType::ARRAY) {
+        // 局部数组变量，计算基址
+        if (symbol->isGlobalVar()) {
+          // 全局数组
+          this->text.push_back(this->indent(1) + "la " + destReg + ", " +
+                               symbol->getName());
+        } else {
+          // 局部数组，使用fp相对偏移
+          this->text.push_back(this->indent(1) + "addi " + destReg + ", $fp, " +
+                               std::to_string(symbol->getOffset() +
+                                              baseOffsetForLocalsAndParams) +
+                               " # Local array " + symbol->getName());
+        }
+      } else {
+        // 普通局部变量或参数
+        this->text.push_back(
+            this->indent(1) + "lw " + destReg + ", " +
+            std::to_string(symbol->getOffset() + baseOffsetForLocalsAndParams) +
+            "($fp) # Local/Param " + symbol->getName());
+      }
     }
   } else {
     throw std::runtime_error(
@@ -289,8 +315,14 @@ void Mips::generateDataSection() {
         }
         this->data.push_back(array_str);
       } else {
+        // 为数组分配空间，使用总大小（所有维度乘积）* 4字节
+        int totalSize = symbol->getTotalSize() * 4;
+        // 确保分配的空间足够大
+        if (totalSize <= 0) {
+          totalSize = 4; // 至少分配4字节
+        }
         this->data.push_back(this->indent(1) + name + ": .space " +
-                             std::to_string(symbol->getSize() * 4));
+                             std::to_string(totalSize));
       }
       last_was_string = false;
     } else if (symbol->getType() == SymbolType::STR) {
@@ -670,22 +702,66 @@ void Mips::generateTextSection() {
       } else { // Actual argument for an outgoing call
         if (currentArgReg < 4) {
           std::string argReg = "$a" + std::to_string(currentArgReg);
-          // Check if it's a symbol AND that symbol is a global string for `la`
-          if (quad.arg1.isSymbol() && quad.arg1.getSymbol() &&
-              quad.arg1.getSymbol()->getType() == SymbolType::STR &&
-              quad.arg1.getSymbol()->isGlobalVar()) {
-            this->text.push_back(this->indent(1) + "la " + argReg + ", " +
-                                 quad.arg1.getSymbol()->getName());
-          } else { // Other cases: local symbol, temp string, number string,
-                   // global non-STR symbol etc.
+          // 检查不同类型参数的传递方式
+          if (quad.arg1.isSymbol() && quad.arg1.getSymbol()) {
+            auto symbol = quad.arg1.getSymbol();
+            if (symbol->getType() == SymbolType::STR && symbol->isGlobalVar()) {
+              // 传递字符串参数
+              this->text.push_back(this->indent(1) + "la " + argReg + ", " +
+                                   symbol->getName());
+            } else if (symbol->getType() == SymbolType::ARRAY) {
+              // 传递数组参数
+              std::string tempReg = this->getTempReg();
+              if (symbol->isGlobalVar()) {
+                // 全局数组，传递基地址
+                this->text.push_back(this->indent(1) + "la " + tempReg + ", " +
+                                     symbol->getName());
+              } else if (!symbol->getDimensions().empty() &&
+                         symbol->getDimensions()[0] == -1) {
+                // 已经是数组参数，传递其地址（指针）
+                int baseOffsetForLocalsAndParams =
+                    this->tempStackSpace.count(this->currentFunctionName)
+                        ? this->tempStackSpace[this->currentFunctionName]
+                        : 0;
+                this->text.push_back(
+                    this->indent(1) + "lw " + tempReg + ", " +
+                    std::to_string(symbol->getOffset() +
+                                   baseOffsetForLocalsAndParams) +
+                    "($fp) # Load array param pointer for " +
+                    symbol->getName());
+              } else {
+                // 局部数组，传递地址
+                int baseOffsetForLocalsAndParams =
+                    this->tempStackSpace.count(this->currentFunctionName)
+                        ? this->tempStackSpace[this->currentFunctionName]
+                        : 0;
+                this->text.push_back(
+                    this->indent(1) + "addi " + tempReg + ", $fp, " +
+                    std::to_string(symbol->getOffset() +
+                                   baseOffsetForLocalsAndParams) +
+                    " # Local array address " + symbol->getName());
+              }
+              this->text.push_back(this->indent(1) + "move " + argReg + ", " +
+                                   tempReg + " # Pass array address");
+              this->releaseTempReg(tempReg);
+            } else {
+              // 普通变量参数
+              std::string tempParamReg = this->getTempReg();
+              this->loadToReg(quad.arg1, tempParamReg);
+              this->text.push_back(this->indent(1) + "move " + argReg + ", " +
+                                   tempParamReg);
+              this->releaseTempReg(tempParamReg);
+            }
+          } else {
+            // 非符号参数（字面量等）
             std::string tempParamReg = this->getTempReg();
-            this->loadToReg(quad.arg1,
-                            tempParamReg); // loadToReg handles all these cases
+            this->loadToReg(quad.arg1, tempParamReg);
             this->text.push_back(this->indent(1) + "move " + argReg + ", " +
                                  tempParamReg);
             this->releaseTempReg(tempParamReg);
           }
         } else {
+          // 栈参数处理
           std::string tempParamReg = this->getTempReg();
           this->loadToReg(quad.arg1, tempParamReg);
           int stack_param_offset =
@@ -738,26 +814,47 @@ void Mips::generateTextSection() {
       std::string baseAddrReg = this->getTempReg(),
                   indexReg = this->getTempReg(), valReg = this->getTempReg(),
                   offsetReg = this->getTempReg();
+
+      // 获取数组基址
       if (arraySymbol->isGlobalVar()) {
         this->text.push_back(this->indent(1) + "la " + baseAddrReg + ", " +
                              arraySymbol->getName());
+      } else if (!arraySymbol->getDimensions().empty() &&
+                 arraySymbol->getDimensions()[0] == -1) {
+        // 数组参数（指针）
+        int baseOff = this->tempStackSpace.count(this->currentFunctionName)
+                          ? this->tempStackSpace[this->currentFunctionName]
+                          : 0;
+        this->text.push_back(
+            this->indent(1) + "lw " + baseAddrReg + ", " +
+            std::to_string(arraySymbol->getOffset() + baseOff) +
+            "($fp) # Load array param pointer");
       } else {
+        // 局部数组
         int baseOff = this->tempStackSpace.count(this->currentFunctionName)
                           ? this->tempStackSpace[this->currentFunctionName]
                           : 0;
         this->text.push_back(
             this->indent(1) + "addi " + baseAddrReg + ", $fp, " +
-            std::to_string(arraySymbol->getOffset() + baseOff));
+            std::to_string(arraySymbol->getOffset() + baseOff) +
+            " # Local array base");
       }
 
+      // 加载索引和值
       this->loadToReg(quad.arg2, indexReg);
       this->loadToReg(quad.result, valReg);
+
+      // 计算元素偏移（每个元素4字节）
       this->text.push_back(this->indent(1) + "sll " + offsetReg + ", " +
-                           indexReg + ", 2");
+                           indexReg + ", 2 # Multiply index by 4");
+      // 计算元素地址
       this->text.push_back(this->indent(1) + "add " + baseAddrReg + ", " +
-                           baseAddrReg + ", " + offsetReg);
+                           baseAddrReg + ", " + offsetReg +
+                           " # Add offset to base");
+      // 存储值到数组元素
       this->text.push_back(this->indent(1) + "sw " + valReg + ", 0(" +
-                           baseAddrReg + ")");
+                           baseAddrReg + ") # Store value to array");
+
       this->releaseTempReg(baseAddrReg);
       this->releaseTempReg(indexReg);
       this->releaseTempReg(valReg);
@@ -776,26 +873,48 @@ void Mips::generateTextSection() {
       std::string baseAddrReg = this->getTempReg(),
                   indexReg = this->getTempReg(), valReg = this->getTempReg(),
                   offsetReg = this->getTempReg();
+
+      // 获取数组基址
       if (arraySymbol->isGlobalVar()) {
         this->text.push_back(this->indent(1) + "la " + baseAddrReg + ", " +
                              arraySymbol->getName());
+      } else if (!arraySymbol->getDimensions().empty() &&
+                 arraySymbol->getDimensions()[0] == -1) {
+        // 数组参数（指针）
+        int baseOff = this->tempStackSpace.count(this->currentFunctionName)
+                          ? this->tempStackSpace[this->currentFunctionName]
+                          : 0;
+        this->text.push_back(
+            this->indent(1) + "lw " + baseAddrReg + ", " +
+            std::to_string(arraySymbol->getOffset() + baseOff) +
+            "($fp) # Load array param pointer");
       } else {
+        // 局部数组
         int baseOff = this->tempStackSpace.count(this->currentFunctionName)
                           ? this->tempStackSpace[this->currentFunctionName]
                           : 0;
         this->text.push_back(
             this->indent(1) + "addi " + baseAddrReg + ", $fp, " +
-            std::to_string(arraySymbol->getOffset() + baseOff));
+            std::to_string(arraySymbol->getOffset() + baseOff) +
+            " # Local array base");
       }
 
+      // 加载索引
       this->loadToReg(quad.arg2, indexReg);
+
+      // 计算元素偏移（每个元素4字节）
       this->text.push_back(this->indent(1) + "sll " + offsetReg + ", " +
-                           indexReg + ", 2");
+                           indexReg + ", 2 # Multiply index by 4");
+      // 计算元素地址
       this->text.push_back(this->indent(1) + "add " + baseAddrReg + ", " +
-                           baseAddrReg + ", " + offsetReg);
+                           baseAddrReg + ", " + offsetReg +
+                           " # Add offset to base");
+      // 读取数组元素值
       this->text.push_back(this->indent(1) + "lw " + valReg + ", 0(" +
-                           baseAddrReg + ")");
+                           baseAddrReg + ") # Load value from array");
+      // 将值存储到目标位置
       this->storeFromReg(quad.result, valReg);
+
       this->releaseTempReg(baseAddrReg);
       this->releaseTempReg(indexReg);
       this->releaseTempReg(valReg);
